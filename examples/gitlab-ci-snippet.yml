@@ -1,0 +1,102 @@
+# ============================================
+# SNIPPET: Tambahkan ke .gitlab-ci.yml yang sudah ada
+# ============================================
+# Copy snippet ini ke file .gitlab-ci.yml project Anda
+#
+# PREREQUISITES:
+# 1. Changelog service sudah running di server
+# 2. Variabel CI/CD sudah diset di GitLab:
+#    - CHANGELOG_SERVICE_URL
+#    - CHANGELOG_API_TOKEN
+#    - GITLAB_TOKEN (dengan scope: read_repository, api)
+
+# ============================================
+# 1. Tambahkan 'changelog' ke stages
+# ============================================
+stages:
+    - scan
+    - build
+    - deploy
+    - migrate
+    - changelog  # <-- Tambahkan ini
+
+# ============================================
+# 2. Tambahkan variabel (opsional, bisa diset di GitLab Settings)
+# ============================================
+variables:
+    CHANGELOG_SERVICE_URL: ${CHANGELOG_SERVICE_URL:-http://10.0.0.1:8080}
+
+# ============================================
+# 3. Copy job-job di bawah ini
+# ============================================
+
+# Generate release notes saat ada tag baru
+changelog:release_notes:
+    stage: changelog
+    tags: [builder]
+    allow_failure: true
+    rules:
+        - if: '$CI_COMMIT_TAG'
+          when: always
+    script:
+        - echo "📝 Generating release notes..."
+        - |
+            curl -s -X POST "${CHANGELOG_SERVICE_URL}/api/v1/release-notes" \
+                -H "Content-Type: application/json" \
+                -H "X-API-Token: ${CHANGELOG_API_TOKEN}" \
+                -d "{
+                    \"project_path\": \"${CI_PROJECT_PATH}\",
+                    \"gitlab_token\": \"${GITLAB_TOKEN}\",
+                    \"tag\": \"${CI_COMMIT_TAG}\"
+                }" > RELEASE_NOTES.md
+
+            echo "✅ Release notes:"
+            cat RELEASE_NOTES.md
+    artifacts:
+        paths:
+            - RELEASE_NOTES.md
+        expire_in: 30 days
+
+# Auto-create GitLab Release
+changelog:create_release:
+    stage: changelog
+    tags: [builder]
+    allow_failure: true
+    rules:
+        - if: '$CI_COMMIT_TAG'
+          when: always
+    needs:
+        - job: changelog:release_notes
+          artifacts: true
+    script:
+        - |
+            NOTES=$(cat RELEASE_NOTES.md | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+            curl -s --request POST \
+                --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                --header "Content-Type: application/json" \
+                --data "{\"tag_name\":\"${CI_COMMIT_TAG}\",\"name\":\"Release ${CI_COMMIT_TAG}\",\"description\":${NOTES}}" \
+                "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases"
+        - echo "✅ GitLab Release created"
+
+# Generate full changelog (manual trigger)
+changelog:full:
+    stage: changelog
+    tags: [builder]
+    allow_failure: true
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "main"'
+          when: manual
+    script:
+        - |
+            curl -s -X POST "${CHANGELOG_SERVICE_URL}/api/v1/changelog" \
+                -H "Content-Type: application/json" \
+                -H "X-API-Token: ${CHANGELOG_API_TOKEN}" \
+                -d "{
+                    \"project_path\": \"${CI_PROJECT_PATH}\",
+                    \"gitlab_token\": \"${GITLAB_TOKEN}\"
+                }" > CHANGELOG.md
+            cat CHANGELOG.md
+    artifacts:
+        paths:
+            - CHANGELOG.md
+        expire_in: 30 days

@@ -1,0 +1,336 @@
+# ============================================
+# GitLab CI/CD Template dengan Changelog Service
+# ============================================
+# Template ini menambahkan stage changelog ke pipeline CI/CD Anda
+# Kompatibel dengan shell runner
+#
+# CARA PAKAI:
+# 1. Copy stage 'changelog' dan job terkait ke .gitlab-ci.yml project Anda
+# 2. Tambahkan variabel di GitLab CI/CD Settings:
+#    - CHANGELOG_SERVICE_URL: URL changelog service (e.g., http://10.0.0.1:8080)
+#    - CHANGELOG_API_TOKEN: Token untuk autentikasi ke service
+#    - GITLAB_TOKEN: Personal Access Token dengan scope read_repository
+#
+# ============================================
+
+stages:
+    - scan
+    - build
+    - deploy
+    - migrate
+    - changelog  # Stage baru untuk changelog
+
+# ============================================
+# VARIABEL GLOBAL
+# ============================================
+variables:
+    DOCKERHUB_REPO: ${DOCKERHUB_USERNAME}/${CI_PROJECT_NAME}
+    # Changelog service configuration
+    CHANGELOG_SERVICE_URL: ${CHANGELOG_SERVICE_URL:-http://changelog-service:8080}
+
+# ============================================
+# BUILD STAGE (contoh dari template Laravel Standard)
+# ============================================
+.build:docker_image:
+    stage: build
+    needs: []
+    allow_failure: false
+    variables:
+        DOCKERHUB_REPO: ${DOCKERHUB_USERNAME}/${CI_PROJECT_NAME}
+    before_script:
+        - echo ${DOCKERHUB_PASSWORD} | docker login -u ${DOCKERHUB_USERNAME} --password-stdin
+
+.build_image:
+    extends: .build:docker_image
+    script:
+        - docker build --progress plain --tag ${DOCKERHUB_REPO}:${CI_COMMIT_BRANCH} --file Dockerfile .
+        - docker push ${DOCKERHUB_REPO}:${CI_COMMIT_BRANCH}
+
+build_image:dev:
+    extends: .build_image
+    only: [develop]
+    tags: [builder]
+    before_script:
+        - echo ${DOCKERHUB_PASSWORD} | docker login -u ${DOCKERHUB_USERNAME} --password-stdin
+        - cp -f $DOTENV_DEV .env
+
+build_image:prod:
+    extends: .build_image
+    only: [main]
+    tags: [builder]
+    before_script:
+        - echo ${DOCKERHUB_PASSWORD} | docker login -u ${DOCKERHUB_USERNAME} --password-stdin
+        - cp -f $DOTENV_PROD .env
+
+# ============================================
+# DEPLOY STAGE
+# ============================================
+.deploy:project_service:
+    extends: .build:docker_image
+    stage: deploy
+    allow_failure: false
+    environment:
+        name: ${DEPLOY_ENV_NAME}
+        url: ${DEPLOY_ENV_URL}
+    script:
+        - echo "Deploying to environment using image:" ${DOCKERHUB_REPO}:${CI_COMMIT_BRANCH}
+        - docker compose -f docker-compose.yml up -d --pull always
+
+deploy_develop:project_service:
+    extends: .deploy:project_service
+    needs:
+        - job: build_image:dev
+          optional: true
+    tags: [{{RUNNER_DEV}}]
+    only: [develop]
+    variables:
+        DEPLOY_ENV_NAME: develop
+        DEPLOY_ENV_URL: {{URL_DEV}}
+
+deploy_prod:project_service:
+    extends: .deploy:project_service
+    needs:
+        - job: build_image:prod
+          optional: true
+    tags: [{{RUNNER_PROD}}]
+    only: [main]
+    variables:
+        DEPLOY_ENV_NAME: production
+        DEPLOY_ENV_URL: {{URL_PROD}}
+
+# ============================================
+# CHANGELOG STAGE - Integrasi dengan Changelog Service
+# ============================================
+
+# Template dasar untuk changelog jobs
+.changelog:base:
+    stage: changelog
+    allow_failure: true
+    variables:
+        CHANGELOG_SERVICE_URL: ${CHANGELOG_SERVICE_URL}
+    before_script:
+        - echo "📝 Preparing changelog generation..."
+        - |
+            # Verifikasi variabel yang diperlukan
+            if [ -z "$CHANGELOG_API_TOKEN" ]; then
+                echo "❌ ERROR: CHANGELOG_API_TOKEN tidak diset"
+                exit 1
+            fi
+            if [ -z "$GITLAB_TOKEN" ]; then
+                echo "❌ ERROR: GITLAB_TOKEN tidak diset"
+                exit 1
+            fi
+
+# ============================================
+# Job: Generate Full Changelog
+# ============================================
+# Menghasilkan changelog lengkap dari semua tags
+changelog:generate_full:
+    extends: .changelog:base
+    tags: [builder]
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "main"'
+          when: manual
+        - if: '$CI_COMMIT_TAG'
+          when: always
+    script:
+        - echo "📝 Generating full changelog for ${CI_PROJECT_PATH}..."
+        - |
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${CHANGELOG_SERVICE_URL}/api/v1/changelog" \
+                -H "Content-Type: application/json" \
+                -H "X-API-Token: ${CHANGELOG_API_TOKEN}" \
+                -d "{
+                    \"project_path\": \"${CI_PROJECT_PATH}\",
+                    \"gitlab_token\": \"${GITLAB_TOKEN}\"
+                }")
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+
+            if [ "$HTTP_CODE" -eq 200 ]; then
+                echo "✅ Changelog generated successfully"
+                echo "$BODY" > CHANGELOG.md
+                cat CHANGELOG.md
+            else
+                echo "❌ Failed to generate changelog (HTTP $HTTP_CODE)"
+                echo "$BODY"
+                exit 1
+            fi
+    artifacts:
+        paths:
+            - CHANGELOG.md
+        expire_in: 30 days
+
+# ============================================
+# Job: Generate Release Notes (Latest Tag Only)
+# ============================================
+# Menghasilkan release notes untuk tag terbaru saja
+# Cocok untuk GitLab Release
+changelog:release_notes:
+    extends: .changelog:base
+    tags: [builder]
+    rules:
+        - if: '$CI_COMMIT_TAG'
+          when: always
+        - if: '$CI_COMMIT_BRANCH == "main"'
+          when: manual
+    script:
+        - echo "📝 Generating release notes for ${CI_PROJECT_PATH}..."
+        - |
+            # Gunakan tag jika ada, atau latest
+            if [ -n "$CI_COMMIT_TAG" ]; then
+                TAG_PARAM="\"tag\": \"${CI_COMMIT_TAG}\","
+            else
+                TAG_PARAM=""
+            fi
+
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${CHANGELOG_SERVICE_URL}/api/v1/release-notes" \
+                -H "Content-Type: application/json" \
+                -H "X-API-Token: ${CHANGELOG_API_TOKEN}" \
+                -d "{
+                    \"project_path\": \"${CI_PROJECT_PATH}\",
+                    \"gitlab_token\": \"${GITLAB_TOKEN}\",
+                    ${TAG_PARAM}
+                    \"output_format\": \"markdown\"
+                }")
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+
+            if [ "$HTTP_CODE" -eq 200 ]; then
+                echo "✅ Release notes generated successfully"
+                echo "$BODY" > RELEASE_NOTES.md
+                cat RELEASE_NOTES.md
+            else
+                echo "❌ Failed to generate release notes (HTTP $HTTP_CODE)"
+                echo "$BODY"
+                exit 1
+            fi
+    artifacts:
+        paths:
+            - RELEASE_NOTES.md
+        expire_in: 30 days
+
+# ============================================
+# Job: Get Bumped Version
+# ============================================
+# Dapatkan versi yang harus di-bump berdasarkan conventional commits
+changelog:bump_version:
+    extends: .changelog:base
+    tags: [builder]
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "main"'
+          when: manual
+        - if: '$CI_COMMIT_BRANCH == "develop"'
+          when: manual
+    script:
+        - echo "🔢 Getting bumped version for ${CI_PROJECT_PATH}..."
+        - |
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${CHANGELOG_SERVICE_URL}/api/v1/bump-version" \
+                -H "Content-Type: application/json" \
+                -H "X-API-Token: ${CHANGELOG_API_TOKEN}" \
+                -d "{
+                    \"project_path\": \"${CI_PROJECT_PATH}\",
+                    \"gitlab_token\": \"${GITLAB_TOKEN}\"
+                }")
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+
+            if [ "$HTTP_CODE" -eq 200 ]; then
+                VERSION=$(echo "$BODY" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+                echo "✅ Next version: $VERSION"
+                echo "$VERSION" > VERSION.txt
+                echo "NEXT_VERSION=$VERSION" >> version.env
+            else
+                echo "❌ Failed to get bumped version (HTTP $HTTP_CODE)"
+                echo "$BODY"
+                exit 1
+            fi
+    artifacts:
+        paths:
+            - VERSION.txt
+            - version.env
+        expire_in: 7 days
+        reports:
+            dotenv: version.env
+
+# ============================================
+# Job: Generate Unreleased Changes
+# ============================================
+# Menghasilkan changelog untuk perubahan yang belum di-release
+changelog:unreleased:
+    extends: .changelog:base
+    tags: [builder]
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "develop"'
+          when: manual
+        - if: '$CI_COMMIT_BRANCH == "staging"'
+          when: manual
+    script:
+        - echo "📝 Generating unreleased changes for ${CI_PROJECT_PATH}..."
+        - |
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${CHANGELOG_SERVICE_URL}/api/v1/changelog" \
+                -H "Content-Type: application/json" \
+                -H "X-API-Token: ${CHANGELOG_API_TOKEN}" \
+                -d "{
+                    \"project_path\": \"${CI_PROJECT_PATH}\",
+                    \"gitlab_token\": \"${GITLAB_TOKEN}\",
+                    \"unreleased\": true
+                }")
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+
+            if [ "$HTTP_CODE" -eq 200 ]; then
+                echo "✅ Unreleased changes generated successfully"
+                echo "$BODY" > UNRELEASED.md
+                cat UNRELEASED.md
+            else
+                echo "❌ Failed to generate unreleased changes (HTTP $HTTP_CODE)"
+                echo "$BODY"
+                exit 1
+            fi
+    artifacts:
+        paths:
+            - UNRELEASED.md
+        expire_in: 7 days
+
+# ============================================
+# Job: Auto Create GitLab Release (dengan Release Notes)
+# ============================================
+# Job ini otomatis membuat GitLab Release ketika ada tag baru
+changelog:create_release:
+    extends: .changelog:base
+    tags: [builder]
+    rules:
+        - if: '$CI_COMMIT_TAG'
+          when: always
+    needs:
+        - job: changelog:release_notes
+          artifacts: true
+    script:
+        - echo "🚀 Creating GitLab Release for tag ${CI_COMMIT_TAG}..."
+        - |
+            # Baca release notes
+            if [ -f "RELEASE_NOTES.md" ]; then
+                RELEASE_NOTES=$(cat RELEASE_NOTES.md)
+            else
+                RELEASE_NOTES="Release ${CI_COMMIT_TAG}"
+            fi
+
+            # Escape JSON special characters
+            RELEASE_NOTES_ESCAPED=$(echo "$RELEASE_NOTES" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+
+            # Create release via GitLab API
+            curl -s --request POST \
+                --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                --header "Content-Type: application/json" \
+                --data "{
+                    \"tag_name\": \"${CI_COMMIT_TAG}\",
+                    \"name\": \"Release ${CI_COMMIT_TAG}\",
+                    \"description\": ${RELEASE_NOTES_ESCAPED}
+                }" \
+                "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases"
+
+            echo "✅ GitLab Release created successfully"

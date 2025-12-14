@@ -1,0 +1,128 @@
+# ============================================
+# Git-Cliff Configuration for GitLab
+# ============================================
+# Template changelog yang dioptimalkan untuk GitLab Release Notes
+
+[changelog]
+# Header changelog
+header = """
+# Changelog
+
+Semua perubahan penting pada proyek ini akan didokumentasikan di file ini.
+
+Format berdasarkan [Keep a Changelog](https://keepachangelog.com/id/1.0.0/),
+dan proyek ini mengikuti [Semantic Versioning](https://semver.org/lang/id/).
+
+"""
+
+# Template body untuk setiap release
+body = """
+{%- macro remote_url() -%}
+  https://gitlab.example.com/{{ remote.gitlab.owner }}/{{ remote.gitlab.repo }}
+{%- endmacro -%}
+
+{% if version -%}
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## [Unreleased]
+{% endif -%}
+
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}\
+{% if commit.gitlab.username %} by @{{ commit.gitlab.username }}{%- endif -%}
+{% if commit.gitlab.pr_number %} ([!{{ commit.gitlab.pr_number }}]({{ self::remote_url() }}/-/merge_requests/{{ commit.gitlab.pr_number }})){%- endif -%}
+{% if commit.id %} ([{{ commit.id | truncate(length=7, end="") }}]({{ self::remote_url() }}/-/commit/{{ commit.id }})){%- endif %}
+{% endfor %}
+{% endfor %}
+
+{%- if gitlab.contributors %}
+### Contributors
+{% for contributor in gitlab.contributors %}
+- @{{ contributor.username }}
+{%- endfor %}
+{% endif -%}
+"""
+
+# Footer (kosong secara default)
+footer = ""
+
+# Trim whitespace
+trim = true
+
+# Postprocessors untuk membersihkan output
+postprocessors = [
+    # Hapus beberapa newline berurutan
+    { pattern = '\n{3,}', replace = "\n\n" },
+]
+
+[git]
+# Gunakan conventional commits
+conventional_commits = true
+
+# Filter commit yang tidak mengikuti conventional commits
+filter_unconventional = true
+
+# Split commits dengan multiple newlines
+split_commits = false
+
+# Proteksi breaking changes dari filter
+protect_breaking_commits = false
+
+# Commit parsers - mapping tipe commit ke grup
+commit_parsers = [
+    { message = "^feat", group = "🚀 Features" },
+    { message = "^fix", group = "🐛 Bug Fixes" },
+    { message = "^doc", group = "📚 Documentation" },
+    { message = "^perf", group = "⚡ Performance" },
+    { message = "^refactor", group = "♻️ Refactoring" },
+    { message = "^style", group = "🎨 Styling" },
+    { message = "^test", group = "🧪 Testing" },
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^chore\\(deps\\)", group = "📦 Dependencies" },
+    { message = "^chore\\(pr\\)", skip = true },
+    { message = "^chore\\(pull\\)", skip = true },
+    { message = "^chore|^ci", group = "⚙️ Miscellaneous" },
+    { body = ".*security", group = "🔐 Security" },
+    { message = "^revert", group = "⏪ Revert" },
+]
+
+# Preprocessors untuk commit message
+commit_preprocessors = [
+    # Hapus issue number di awal
+    { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "" },
+]
+
+# Link parsers untuk GitLab
+link_parsers = [
+    # Issue references: #123
+    { pattern = "#(\\d+)", href = "https://gitlab.example.com/{{ remote.gitlab.owner }}/{{ remote.gitlab.repo }}/-/issues/$1" },
+    # Merge request references: !123
+    { pattern = "!(\\d+)", href = "https://gitlab.example.com/{{ remote.gitlab.owner }}/{{ remote.gitlab.repo }}/-/merge_requests/$1" },
+]
+
+# Filter tags dengan pattern
+tag_pattern = "v[0-9].*"
+
+# Sorting commits
+sort_commits = "newest"
+
+[bump]
+# Features selalu bump minor version
+features_always_bump_minor = true
+
+# Breaking changes selalu bump major version
+breaking_always_bump_major = true
+
+# Initial tag jika belum ada tag
+initial_tag = "0.1.0"
+
+# Otomatis detect bump type
+bump_type = "auto"
+
+# Remote GitLab configuration (akan di-override via env variables)
+[remote.gitlab]
+owner = ""
+repo = ""
+token = ""

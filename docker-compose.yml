@@ -1,0 +1,45 @@
+services:
+  changelog-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: changelog-service:latest
+    container_name: changelog-service
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      # Timezone untuk timestamp changelog
+      - TZ=${TZ:-Asia/Jakarta}
+      # URL GitLab self-hosted Anda
+      - GITLAB_URL=${GITLAB_URL:-https://gitlab.example.com}
+      # API Token untuk autentikasi ke service ini
+      - CHANGELOG_API_TOKEN=${CHANGELOG_API_TOKEN:-your-secret-token}
+      # Debug mode (set true untuk development)
+      - DEBUG=${DEBUG:-false}
+    volumes:
+      # Mount custom config jika diperlukan
+      - ./config:/app/config:ro
+      # Optional: mount local repositories untuk /api/v1/changelog/local
+      # - /path/to/repos:/mnt/repos:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - changelog-network
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+networks:
+  changelog-network:
+    driver: bridge
