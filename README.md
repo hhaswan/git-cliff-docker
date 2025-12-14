@@ -3,6 +3,8 @@
 Self-hosted changelog & release notes service untuk GitLab (self-managed), dibangun menggunakan [git-cliff](https://github.com/orhun/git-cliff).
 
 > **Reference:** This project is built on top of [git-cliff](https://github.com/orhun/git-cliff) - a highly customizable changelog generator.
+>
+> Lihat [COMPARISON.md](COMPARISON.md) untuk perbedaan dengan git-cliff original.
 
 ## Arsitektur
 
