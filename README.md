@@ -337,15 +337,27 @@ Anda bisa mengedit file ini atau mengirim custom config via API.
 
 Service ini menggunakan [Conventional Commits](https://www.conventionalcommits.org/) untuk mengkategorikan perubahan:
 
-| Prefix | Kategori | Contoh |
-|--------|----------|--------|
-| `feat:` | Features | `feat: add user authentication` |
-| `fix:` | Bug Fixes | `fix: resolve login issue` |
-| `docs:` | Documentation | `docs: update README` |
-| `perf:` | Performance | `perf: optimize query` |
-| `refactor:` | Refactoring | `refactor: restructure modules` |
-| `test:` | Testing | `test: add unit tests` |
-| `chore:` | Miscellaneous | `chore: update dependencies` |
+| Prefix | Kategori | Deskripsi | Contoh |
+|--------|----------|-----------|--------|
+| `feat:` | 🚀 Features | Fitur baru | `feat: add user authentication` |
+| `fix:` | 🐛 Bug Fixes | Perbaikan bug | `fix: resolve login issue` |
+| `docs:` | 📚 Documentation | Perubahan dokumentasi saja | `docs: update README` |
+| `perf:` | ⚡ Performance | Peningkatan performa | `perf: optimize database query` |
+| `refactor:` | ♻️ Refactoring | Refactoring tanpa mengubah fitur | `refactor: restructure modules` |
+| `style:` | 🎨 Styling | Formatting, whitespace, dll | `style: fix indentation` |
+| `test:` | 🧪 Testing | Menambah atau memperbaiki tests | `test: add unit tests` |
+| `build:` | 🔧 DevOps & Infrastructure | Build system, Docker, dependencies | `build: upgrade base docker image` |
+| `ci:` | 🔧 DevOps & Infrastructure | CI/CD pipeline configuration | `ci: add deploy stage to pipeline` |
+| `chore:` | ⚙️ Miscellaneous | Maintenance tasks lainnya | `chore: cleanup unused files` |
+| `revert:` | ⏪ Revert | Revert commit sebelumnya | `revert: revert commit abc123` |
+
+**Contoh dengan scope:**
+```bash
+feat(auth): add OAuth2 login
+fix(api): resolve rate limiting bug
+build(docker): upgrade python to 3.12
+ci(gitlab): add changelog automation
+```
 
 ## Troubleshooting
 
