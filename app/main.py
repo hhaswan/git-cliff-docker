@@ -75,7 +75,7 @@ postprocessors = [
 
 [git]
 conventional_commits = true
-filter_unconventional = true
+filter_unconventional = false
 split_commits = false
 protect_breaking_commits = false
 
@@ -94,6 +94,7 @@ commit_parsers = [
     {{ message = "^chore|^ci", group = "⚙️ Miscellaneous" }},
     {{ body = ".*security", group = "🔐 Security" }},
     {{ message = "^revert", group = "⏪ Revert" }},
+    {{ message = ".*", group = "📝 Other Changes" }},
 ]
 
 commit_preprocessors = [
@@ -105,7 +106,7 @@ link_parsers = [
     {{ pattern = "!(\\\\d+)", href = "{gitlab_url}/{project_path}/-/merge_requests/$1" }},
 ]
 
-tag_pattern = "v[0-9].*"
+tag_pattern = "v?[0-9].*"
 sort_commits = "newest"
 
 [bump]
