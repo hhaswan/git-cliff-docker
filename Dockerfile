@@ -3,7 +3,7 @@
 # ============================================
 # Multi-stage build untuk ukuran image minimal
 
-FROM rust:1.83-slim-bookworm AS builder
+FROM rust:1.85-slim-bookworm AS builder
 
 # Install dependencies untuk build
 RUN apt-get update && apt-get install -y \
