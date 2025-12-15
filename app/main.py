@@ -97,7 +97,7 @@ commit_parsers = [
 ]
 
 commit_preprocessors = [
-    {{ pattern = '\\((\w+\\s)?#([0-9]+)\\)', replace = "" }},
+    {{ pattern = '\\((\\w+\\s)?#([0-9]+)\\)', replace = "" }},
 ]
 
 link_parsers = [
