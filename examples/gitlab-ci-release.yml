@@ -1,0 +1,105 @@
+# ============================================
+# GitLab CI/CD: Changelog & Release Jobs
+# ============================================
+# File ini berisi job untuk:
+# 1. Generate release notes dan create GitLab Release saat ada tag
+# 2. Generate dan commit CHANGELOG.md ke repo
+#
+# PREREQUISITES:
+# 1. Changelog service sudah running di server
+# 2. Variabel CI/CD sudah diset di GitLab:
+#    - CHANGELOG_SERVICE_URL: URL changelog service (e.g., http://10.0.0.1:8080)
+#    - CHANGELOG_API_TOKEN: Token untuk autentikasi ke service
+#    - GITLAB_TOKEN: Personal Access Token dengan scope: api, read_repository, write_repository
+#
+# CARA PAKAI:
+# 1. Tambahkan 'changelog' ke stages di .gitlab-ci.yml
+# 2. Copy job-job di bawah ini ke .gitlab-ci.yml project Anda
+
+# ============================================
+# 1. Tambahkan 'changelog' ke stages
+# ============================================
+stages:
+    - build
+    - deploy
+    - changelog  # <-- Tambahkan ini
+
+# ============================================
+# 2. Job: Generate Release Notes & Create GitLab Release
+# ============================================
+# Otomatis berjalan saat ada tag baru
+changelog:release:
+    stage: changelog
+    tags: [builder]
+    allow_failure: true
+    rules:
+        - if: '$CI_COMMIT_TAG'
+          when: always
+    script:
+        # Generate release notes untuk tag ini
+        - |
+            curl -s -X POST "${CHANGELOG_SERVICE_URL}/api/v1/release-notes" \
+                -H "Content-Type: application/json" \
+                -H "X-API-Token: ${CHANGELOG_API_TOKEN}" \
+                -d "{
+                    \"project_path\": \"${CI_PROJECT_PATH}\",
+                    \"gitlab_token\": \"${GITLAB_TOKEN}\",
+                    \"tag\": \"${CI_COMMIT_TAG}\"
+                }" > RELEASE_NOTES.md
+        - echo "=== Release Notes for ${CI_COMMIT_TAG} ==="
+        - cat RELEASE_NOTES.md
+        # Create GitLab Release dengan release notes
+        - |
+            RELEASE_NOTES=$(cat RELEASE_NOTES.md | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
+            curl -s -X POST "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases" \
+                -H "Content-Type: application/json" \
+                -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                -d "{
+                    \"tag_name\": \"${CI_COMMIT_TAG}\",
+                    \"name\": \"Release ${CI_COMMIT_TAG}\",
+                    \"description\": \"${RELEASE_NOTES}\"
+                }"
+        - echo "GitLab Release created for ${CI_COMMIT_TAG}"
+
+# ============================================
+# 3. Job: Generate & Commit CHANGELOG.md
+# ============================================
+# - Otomatis saat ada tag
+# - Manual trigger dari branch develop
+changelog:update:
+    stage: changelog
+    tags: [builder]
+    allow_failure: true
+    rules:
+        - if: '$CI_COMMIT_TAG'
+        - if: '$CI_COMMIT_BRANCH == "develop"'
+          when: manual
+    before_script:
+        - git config --global user.email "gitlab-ci@${CI_SERVER_HOST}"
+        - git config --global user.name "GitLab CI"
+    script:
+        # Generate full changelog dari service
+        - |
+            curl -s -X POST "${CHANGELOG_SERVICE_URL}/api/v1/changelog" \
+                -H "Content-Type: application/json" \
+                -H "X-API-Token: ${CHANGELOG_API_TOKEN}" \
+                -d "{
+                    \"project_path\": \"${CI_PROJECT_PATH}\",
+                    \"gitlab_token\": \"${GITLAB_TOKEN}\"
+                }" > CHANGELOG.md
+        - echo "=== Full Changelog Generated ==="
+        - cat CHANGELOG.md
+        # Clone repo dan push CHANGELOG.md
+        - git clone "https://oauth2:${GITLAB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" repo
+        - cp CHANGELOG.md repo/
+        - cd repo
+        - git add CHANGELOG.md
+        - |
+            if git diff --cached --quiet; then
+                echo "No changes to CHANGELOG.md"
+            else
+                TAG_INFO="${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}}"
+                git commit -m "docs: update CHANGELOG.md for ${TAG_INFO} [skip ci]"
+                git push origin HEAD:main
+                echo "CHANGELOG.md updated and pushed to main"
+            fi

@@ -92,7 +92,28 @@ Di GitLab project, tambahkan variabel di **Settings > CI/CD > Variables**:
 |----------|-------|-----------|--------|
 | `CHANGELOG_SERVICE_URL` | `http://<server-ip>:8080` | No | No |
 | `CHANGELOG_API_TOKEN` | Token yang sama dengan `.env` | Yes | Yes |
-| `GITLAB_TOKEN` | Personal Access Token dengan scope `read_repository`, `api` | Yes | Yes |
+| `GITLAB_TOKEN` | **Personal Access Token** (PAT) dengan scope `read_repository`, `write_repository`, `api` | Yes | Yes |
+
+**Cara membuat Personal Access Token (PAT):**
+1. Buka GitLab → Klik avatar di pojok kanan atas → **Preferences**
+2. Di sidebar kiri, pilih **Access Tokens**
+3. Atau langsung akses: `https://<gitlab-url>/-/user_settings/personal_access_tokens`
+4. Isi form:
+   - **Token name**: `changelog-service` (atau nama lain)
+   - **Expiration date**: Set sesuai kebutuhan
+   - **Scopes**: Centang `api`, `read_repository`, `write_repository`
+5. Klik **Create personal access token**
+6. **Copy token** yang muncul (hanya ditampilkan sekali!)
+
+> **Penting tentang GITLAB_TOKEN:**
+> - Gunakan **Personal Access Token (PAT)**, bukan Project Access Token
+> - Project Access Token tidak memiliki akses yang cukup untuk operasi git push dan create release
+> - PAT harus dibuat oleh user yang memiliki akses ke project
+
+> **Penting tentang Protected Variables:**
+> - Jika variable di-set sebagai **Protected = Yes**, maka variable hanya tersedia untuk protected branches dan **protected tags**
+> - Pastikan tag yang dibuat juga ter-protect, atau set variable sebagai **Protected = No**
+> - Untuk protect semua tags: **Settings > Repository > Protected tags** → tambahkan pattern `*` atau `v*`
 
 ### 4. Tambahkan ke .gitlab-ci.yml
 
@@ -106,14 +127,16 @@ stages:
 
 # ... existing jobs ...
 
-# Generate release notes saat ada tag
-changelog:release_notes:
+# Generate release notes dan create GitLab Release saat ada tag
+changelog:release:
     stage: changelog
     tags: [builder]
     allow_failure: true
     rules:
         - if: '$CI_COMMIT_TAG'
+          when: always
     script:
+        # Generate release notes untuk tag ini
         - |
             curl -s -X POST "${CHANGELOG_SERVICE_URL}/api/v1/release-notes" \
                 -H "Content-Type: application/json" \
@@ -123,11 +146,64 @@ changelog:release_notes:
                     \"gitlab_token\": \"${GITLAB_TOKEN}\",
                     \"tag\": \"${CI_COMMIT_TAG}\"
                 }" > RELEASE_NOTES.md
-            cat RELEASE_NOTES.md
-    artifacts:
-        paths:
-            - RELEASE_NOTES.md
+        - echo "=== Release Notes for ${CI_COMMIT_TAG} ==="
+        - cat RELEASE_NOTES.md
+        # Create GitLab Release dengan release notes
+        - |
+            RELEASE_NOTES=$(cat RELEASE_NOTES.md | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
+            curl -s -X POST "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases" \
+                -H "Content-Type: application/json" \
+                -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                -d "{
+                    \"tag_name\": \"${CI_COMMIT_TAG}\",
+                    \"name\": \"Release ${CI_COMMIT_TAG}\",
+                    \"description\": \"${RELEASE_NOTES}\"
+                }"
+        - echo "GitLab Release created for ${CI_COMMIT_TAG}"
+
+# Generate dan commit CHANGELOG.md ke repo (otomatis saat tag)
+changelog:update:
+    stage: changelog
+    tags: [builder]
+    allow_failure: true
+    rules:
+        - if: '$CI_COMMIT_TAG'
+        - if: '$CI_COMMIT_BRANCH == "develop"'
+          when: manual
+    before_script:
+        - git config --global user.email "gitlab-ci@${CI_SERVER_HOST}"
+        - git config --global user.name "GitLab CI"
+    script:
+        # Generate full changelog dari service
+        - |
+            curl -s -X POST "${CHANGELOG_SERVICE_URL}/api/v1/changelog" \
+                -H "Content-Type: application/json" \
+                -H "X-API-Token: ${CHANGELOG_API_TOKEN}" \
+                -d "{
+                    \"project_path\": \"${CI_PROJECT_PATH}\",
+                    \"gitlab_token\": \"${GITLAB_TOKEN}\"
+                }" > CHANGELOG.md
+        - echo "=== Full Changelog Generated ==="
+        - cat CHANGELOG.md
+        # Clone repo dan push CHANGELOG.md
+        - git clone "https://oauth2:${GITLAB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" repo
+        - cp CHANGELOG.md repo/
+        - cd repo
+        - git add CHANGELOG.md
+        - |
+            if git diff --cached --quiet; then
+                echo "No changes to CHANGELOG.md"
+            else
+                TAG_INFO="${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}}"
+                git commit -m "docs: update CHANGELOG.md for ${TAG_INFO} [skip ci]"
+                git push origin HEAD:main
+                echo "CHANGELOG.md updated and pushed to main"
+            fi
 ```
+
+> **Catatan untuk Shell Runner:**
+> - `before_script` dengan `git config --global` diperlukan untuk mengatur identitas git saat commit
+> - Jika tidak di-set, git commit akan gagal karena tidak ada user.email dan user.name
 
 ## API Endpoints
 
@@ -177,6 +253,55 @@ curl -X POST http://localhost:8080/api/v1/bump-version \
     "project_path": "devops/my-project",
     "gitlab_token": "glpat-xxxx"
   }'
+```
+
+### Contoh Output
+
+**CHANGELOG.md (Full Changelog):**
+```markdown
+# Changelog
+
+Semua perubahan penting pada proyek ini akan didokumentasikan di file ini.
+
+## [1.2.0] - 2025-12-16
+
+### 🚀 Features
+- **auth:** Add OAuth2 login support ([a1b2c3d](https://gitlab.example.com/mygroup/myproject/-/commit/a1b2c3d))
+- **api:** Implement rate limiting ([e4f5g6h](https://gitlab.example.com/mygroup/myproject/-/commit/e4f5g6h))
+
+### 🐛 Bug Fixes
+- **login:** Fix session timeout issue ([i7j8k9l](https://gitlab.example.com/mygroup/myproject/-/commit/i7j8k9l))
+- Resolve database connection leak ([m0n1o2p](https://gitlab.example.com/mygroup/myproject/-/commit/m0n1o2p))
+
+### 📚 Documentation
+- Update API documentation ([q3r4s5t](https://gitlab.example.com/mygroup/myproject/-/commit/q3r4s5t))
+
+### ⚙️ Miscellaneous
+- Update dependencies ([u6v7w8x](https://gitlab.example.com/mygroup/myproject/-/commit/u6v7w8x))
+
+## [1.1.0] - 2025-12-01
+
+### 🚀 Features
+- Add user profile page ([y9z0a1b](https://gitlab.example.com/mygroup/myproject/-/commit/y9z0a1b))
+
+### 🐛 Bug Fixes
+- Fix pagination issue ([c2d3e4f](https://gitlab.example.com/mygroup/myproject/-/commit/c2d3e4f))
+```
+
+**Release Notes (untuk tag tertentu):**
+```markdown
+## [1.2.0] - 2025-12-16
+
+### 🚀 Features
+- **auth:** Add OAuth2 login support ([a1b2c3d](https://gitlab.example.com/mygroup/myproject/-/commit/a1b2c3d))
+- **api:** Implement rate limiting ([e4f5g6h](https://gitlab.example.com/mygroup/myproject/-/commit/e4f5g6h))
+
+### 🐛 Bug Fixes
+- **login:** Fix session timeout issue ([i7j8k9l](https://gitlab.example.com/mygroup/myproject/-/commit/i7j8k9l))
+- Resolve database connection leak ([m0n1o2p](https://gitlab.example.com/mygroup/myproject/-/commit/m0n1o2p))
+
+### 📚 Documentation
+- Update API documentation ([q3r4s5t](https://gitlab.example.com/mygroup/myproject/-/commit/q3r4s5t))
 ```
 
 ## Struktur Project
@@ -234,6 +359,24 @@ Service ini menggunakan [Conventional Commits](https://www.conventionalcommits.o
 ### Changelog kosong
 - Pastikan project memiliki tags
 - Pastikan commit message mengikuti format Conventional Commits
+
+### Error "HTTP Basic: Access denied" saat git clone/push
+- Pastikan menggunakan **Personal Access Token (PAT)**, bukan Project Access Token
+- Pastikan token memiliki scope `write_repository` untuk operasi push
+- Cek apakah token sudah expired
+
+### CI/CD Variables tidak terbaca (Unauthorized pada push ke-2, dst)
+- Jika variable di-set sebagai **Protected**, pastikan tag juga ter-protect
+- Solusi 1: Set variable sebagai **Protected = No**
+- Solusi 2: Protect semua tags di **Settings > Repository > Protected tags** dengan pattern `*`
+
+### Git commit gagal: "Please tell me who you are"
+- Tambahkan `before_script` untuk set git config:
+```yaml
+before_script:
+    - git config --global user.email "gitlab-ci@${CI_SERVER_HOST}"
+    - git config --global user.name "GitLab CI"
+```
 
 ## License
 
