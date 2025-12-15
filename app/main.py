@@ -112,7 +112,6 @@ sort_commits = "newest"
 features_always_bump_minor = true
 breaking_always_bump_major = true
 initial_tag = "0.1.0"
-bump_type = "auto"
 '''
     return config
 
