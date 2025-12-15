@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install git-cliff dari source dengan semua features
-RUN cargo install git-cliff --features github,gitlab,bitbucket,gitea
+RUN cargo install git-cliff --locked --features github,gitlab,bitbucket,gitea
 
 # ============================================
 # Runtime Stage
